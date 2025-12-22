@@ -1,0 +1,25 @@
+# База данных SQLite (самое важное)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Виртуальное окружение Python
+venv/
+.venv/
+env/
+
+# Кэш Python
+__pycache__/
+*.pyc
+
+# Настройки Streamlit (локальные)
+.streamlit/config.toml
+
+# Временные файлы и отчеты Excel (чтобы не мусорить в репозитории)
+*.xlsx
+*.xls
+
+# Файлы операционной системы
+.DS_Store
+Thumbs.db
