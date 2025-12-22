@@ -9,7 +9,7 @@ st.set_page_config(page_title="КВН Google Sync", layout="wide")
 
 # --- ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS ---
 # ВАЖНО: Вставьте сюда URL вашей созданной таблицы
-SHEET_URL = "ССЫЛКА_НА_ВАШУ_ТАБЛИЦУ" 
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1YPHgLZ9582qXQkemxYosp7CKClPR8HRw5-f98kdDHmk/edit?usp=sharing" 
 
 def get_google_sheet():
     try:
@@ -118,3 +118,4 @@ elif role == "⚙️ Настройки":
     if st.button("Очистить все данные в Google Таблице"):
         spread.df_to_sheet(pd.DataFrame(columns=['contest', 'team', 'judge_id', 'score']), sheet='Scores', replace=True)
         st.success("Таблица очищена!")
+
