@@ -1,139 +1,152 @@
 import streamlit as st
 import pandas as pd
 import io
+import sqlite3
+import time
 
-st.set_page_config(page_title="КВН Судья Про", layout="wide")
+# --- НАСТРОЙКИ СТРАНИЦЫ ---
+st.set_page_config(page_title="КВН СУПЕР-ПРО", layout="wide", initial_sidebar_state="expanded")
 
-# Глобальное хранилище данных
-@st.cache_resource
-def get_global_store():
-    return {
-        'teams': ["Команда 1", "Команда 2", "Команда 3", "Команда 4"],
-        'contests': ["Приветствие", "Разминка", "СТЭМ", "Музыкалка"],
-        'judges_names': ["Судья 1", "Судья 2", "Судья 3", "Судья 4", "Судья 5"],
-        'scores': {} 
-    }
+# --- БАЗА ДАННЫХ (Пункт 3: Сохранение) ---
+def init_db():
+    conn = sqlite3.connect('kvn_data.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS scores 
+                 (contest TEXT, team TEXT, judge_id INTEGER, score REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS config 
+                 (key TEXT PRIMARY KEY, value TEXT)''')
+    conn.commit()
+    return conn
 
-store = get_global_store()
+conn = init_db()
 
-def sync_scores_structure():
-    num_judges = len(store['judges_names'])
-    for c in store['contests']:
-        if c not in store['scores']:
-            store['scores'][c] = {}
-        for t in store['teams']:
-            if t not in store['scores'][c] or len(store['scores'][c][t]) != num_judges:
-                # Если судья был добавлен/удален, корректируем список оценок
-                old_marks = store['scores'][c].get(t, [])
-                if len(old_marks) < num_judges:
-                    store['scores'][c][t] = old_marks + [0.0] * (num_judges - len(old_marks))
-                else:
-                    store['scores'][c][t] = old_marks[:num_judges]
+def save_score(contest, team, j_id, val):
+    c = conn.cursor()
+    c.execute("REPLACE INTO scores (contest, team, judge_id, score) VALUES (?, ?, ?, ?)", 
+              (contest, team, j_id, val))
+    conn.commit()
 
-sync_scores_structure()
+def load_scores():
+    return pd.read_sql("SELECT * FROM scores", conn)
 
-st.title("🏆 КВН: Система прозрачного судейства")
+# --- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ---
+if 'teams' not in st.session_state:
+    st.session_state.teams = ["Команда 1", "Команда 2", "Команда 3", "Команда 4"]
+if 'contests' not in st.session_state:
+    st.session_state.contests = ["Приветствие", "Разминка", "СТЭМ", "Музыкалка"]
+if 'judges' not in st.session_state:
+    st.session_state.judges = ["Судья 1", "Судья 2", "Судья 3", "Судья 4", "Судья 5"]
 
-role = st.sidebar.radio("Ваша роль:", ["📱 Судья", "📊 Ведущий / Протокол"])
+# --- АВТОРИЗАЦИЯ (Пункт 2: Пароли) ---
+st.sidebar.title("🔐 Вход в систему")
+password = st.sidebar.text_input("Введите пароль доступа:", type="password")
+
+# Простые пароли для примера
+ADMIN_PWD = "admin"
+JUDGE_PWD = "kvn"
+
+if password not in [ADMIN_PWD, JUDGE_PWD]:
+    st.warning("Пожалуйста, введите пароль в боковой панели для доступа к системе.")
+    st.stop()
+
+# --- ОСНОВНОЕ МЕНЮ ---
+role = st.sidebar.radio("Перейти к:", ["📱 Судейство", "📊 Табло для зала", "🕵️ Детальный отчет", "⚙️ Настройки (Админ)"])
+
+# --- ПУНКТ 5: ТАЙМЕР РАЗМИНКИ ---
+def run_timer():
+    placeholder = st.empty()
+    for i in range(30, -1, -1):
+        placeholder.metric("Осталось времени", f"{i} сек")
+        time.sleep(1)
+    st.balloons()
+    st.error("ВРЕМЯ ВЫШЛО!")
 
 # --- ИНТЕРФЕЙС СУДЬИ ---
-if role == "📱 Судья":
-    judge_name = st.sidebar.selectbox("Выберите ваше имя:", store['judges_names'])
-    judge_id = store['judges_names'].index(judge_name)
+if role == "📱 Судейство":
+    judge_name = st.sidebar.selectbox("Ваше имя:", st.session_state.judges)
+    judge_idx = st.session_state.judges.index(judge_name)
+    contest = st.selectbox("Текущий конкурс:", st.session_state.contests)
     
-    if st.button("🔄 Синхронизировать списки"):
-        st.rerun()
-
-    contest = st.selectbox("Конкурс:", store['contests'])
     st.subheader(f"Оценочный лист: {judge_name}")
     
-    with st.form("score_form"):
-        for team in store['teams']:
-            st.write(f"**{team}**")
-            current_val = store['scores'][contest][team][judge_id]
-            
-            score_options = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-            selected_score = st.radio(
-                f"Балл:", score_options,
-                index=score_options.index(current_val) if current_val in score_options else 0,
-                horizontal=True, key=f"r_{contest}_{team}_{judge_id}"
-            )
-            store['scores'][contest][team][judge_id] = selected_score
-            
-        if st.form_submit_button("✅ ОТПРАВИТЬ БАЛЛЫ"):
-            st.success("Оценки сохранены в системе!")
-
-# --- ИНТЕРФЕЙС ВЕДУЩЕГО ---
-else:
-    t_results, t_details, t_config = st.tabs(["📈 Итоговое Табло", "🕵️ Детализация (Кто что поставил)", "⚙️ Настройки"])
+    # Загружаем существующие оценки из БД
+    db_df = load_scores()
     
-    # 1. Сводная таблица (Средние баллы)
-    with t_results:
-        summary_data = []
-        for team in store['teams']:
-            row = {"Команда": team}
-            total = 0
-            for c in store['contests']:
-                marks = store['scores'].get(c, {}).get(team, [0.0]*len(store['judges_names']))
-                avg = sum(marks) / len(store['judges_names'])
-                row[c] = round(avg, 2)
-                total += avg
-            row["ИТОГО"] = round(total, 2)
-            summary_data.append(row)
-        
-        df_summary = pd.DataFrame(summary_data)
-        st.header("Сводный протокол (средние баллы)")
-        st.table(df_summary.style.highlight_max(axis=0, subset=['ИТОГО'], color='#CFFFCC'))
+    with st.form("judge_form"):
+        for team in st.session_state.teams:
+            # Ищем оценку в БД
+            mask = (db_df['contest'] == contest) & (db_df['team'] == team) & (db_df['judge_id'] == judge_idx)
+            val = db_df[mask]['score'].values[0] if not db_df[mask].empty else 0.0
+            
+            st.write(f"**{team}**")
+            score = st.radio(f"Балл для {team}", [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 
+                             index=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0].index(val), 
+                             horizontal=True, key=f"s_{team}")
+            if st.form_submit_button(f"Сохранить {team}"):
+                save_score(contest, team, judge_idx, score)
+                st.success(f"Оценка для {team} сохранена!")
 
-    # 2. Детальный протокол (Все оценки)
-    with t_details:
-        st.header("Детальная ведомость оценок")
-        
-        detailed_rows = []
-        for c in store['contests']:
-            for t in store['teams']:
-                row = {"Конкурс": c, "Команда": t}
-                marks = store['scores'].get(c, {}).get(t, [0.0]*len(store['judges_names']))
-                # Добавляем оценку каждого судьи в колонку
-                for i, name in enumerate(store['judges_names']):
-                    row[name] = marks[i]
-                row["Средний балл"] = round(sum(marks)/len(marks), 2)
-                detailed_rows.append(row)
-        
-        df_detailed = pd.DataFrame(detailed_rows)
-        st.dataframe(df_detailed, use_container_width=True)
+# --- ПУНКТ 1: ВИЗУАЛИЗАЦИЯ ДЛЯ ЗАЛА ---
+elif role == "📊 Табло для зала":
+    st.header("🏆 ТЕКУЩИЙ РЕЙТИНГ КОМАНД")
+    
+    # Олимпийская система (Пункт 4)
+    use_olympic = st.sidebar.checkbox("Олимпийская система (без min/max)")
+    
+    db_df = load_scores()
+    results = []
+    for team in st.session_state.teams:
+        row = {"Команда": team}
+        total = 0
+        for c in st.session_state.contests:
+            marks = [db_df[(db_df['contest']==c) & (db_df['team']==team) & (db_df['judge_id']==i)]['score'].values[0] 
+                     if not db_df[(db_df['contest']==c) & (db_df['team']==team) & (db_df['judge_id']==i)].empty else 0.0 
+                     for i in range(len(st.session_state.judges))]
+            
+            if use_olympic and len(marks) > 2:
+                marks.sort()
+                calc_marks = marks[1:-1] # Убираем первый и последний
+                avg = sum(calc_marks) / len(calc_marks)
+            else:
+                avg = sum(marks) / len(marks) if marks else 0
+            
+            total += avg
+        row["Сумма"] = round(total, 2)
+        results.append(row)
+    
+    res_df = pd.DataFrame(results).sort_values(by="Сумма", ascending=False)
+    
+    # Красивый график (Пункт 1)
+    st.bar_chart(res_df.set_index("Команда")["Сумма"])
+    st.table(res_df)
+    
+    if st.button("⏱️ Запустить таймер разминки (30 сек)"):
+        run_timer()
 
-        # Кнопка скачивания Excel с двумя листами
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df_summary.to_excel(writer, index=False, sheet_name='Итоги')
-            df_detailed.to_excel(writer, index=False, sheet_name='Детализация_по_судьям')
-        
-        st.download_button("📥 Скачать полный Excel-отчет", buffer.getvalue(), "kvn_full_report.xlsx")
+# --- ДЕТАЛЬНЫЙ ОТЧЕТ ---
+elif role == "🕵️ Детальный отчет":
+    st.header("Полная ведомость")
+    db_df = load_scores()
+    st.dataframe(db_df)
+    
+    buffer = io.BytesIO()
+    db_df.to_excel(buffer, index=False)
+    st.download_button("📥 Скачать БД в Excel", buffer.getvalue(), "kvn_db.xlsx")
 
-    # 3. Настройки
-    with t_config:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Команды")
-            store['teams'] = [st.text_input(f"Команда {i+1}", value=t, key=f"t_{i}") for i, t in enumerate(store['teams'])]
-        with col2:
-            st.subheader("Судьи")
-            store['judges_names'] = [st.text_input(f"Судья {i+1}", value=j, key=f"j_{i}") for i, j in enumerate(store['judges_names'])]
-        
-        st.subheader("Конкурсы")
-        new_contests = []
-        for i, ct in enumerate(store['contests']):
-            new_contests.append(st.text_input(f"Конкурс {i+1}", value=ct, key=f"c_{i}"))
-        
-        add_c = st.text_input("Добавить новый конкурс:")
-        if st.button("Сохранить все изменения"):
-            if add_c: new_contests.append(add_c)
-            store['contests'] = new_contests
-            sync_scores_structure()
-            st.success("Настройки успешно обновлены!")
-            st.rerun()
+# --- НАСТРОЙКИ (АДМИН) ---
+elif role == "⚙️ Настройки (Админ)":
+    if password != ADMIN_PWD:
+        st.error("Доступ только для Администратора!")
+    else:
+        st.session_state.teams = st.text_area("Команды (через запятую)", ",".join(st.session_state.teams)).split(",")
+        st.session_state.judges = st.text_area("Судьи (через запятую)", ",".join(st.session_state.judges)).split(",")
+        st.session_state.contests = st.text_area("Конкурсы (через запятую)", ",".join(st.session_state.contests)).split(",")
+        if st.button("Обновить конфигурацию"):
+            st.success("Настройки обновлены!")
 
-if st.sidebar.button("⚠️ СБРОСИТЬ ВСЮ ИГРУ"):
-    st.cache_resource.clear()
-    st.rerun()
+if st.sidebar.button("🧹 Очистить базу данных"):
+    if password == ADMIN_PWD:
+        c = conn.cursor()
+        c.execute("DELETE FROM scores")
+        conn.commit()
+        st.rerun()
